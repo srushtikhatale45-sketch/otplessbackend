@@ -6,73 +6,50 @@ const sequelize = require('./config/database');
 const authRoutes = require('./routes/authRoutes');
 const clientRoutes = require('./routes/clientRoutes');
 const otpRoutes = require('./routes/otpRoutes');
-const tokenService = require('./services/tokenService');
 
 const app = express();
 
-// CORS configuration - MUST be before routes
+// CORS configuration
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:3000', 'http://127.0.0.1:5173'],
-  credentials: true, // MUST be true for cookies
+  origin: ['http://localhost:3000', 'http://localhost:5173'],
+  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Cookie'],
-  exposedHeaders: ['Set-Cookie']
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Middleware
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
-
-// Request logging middleware
-app.use((req, res, next) => {
-  console.log(`${req.method} ${req.path} - Cookies:`, req.cookies ? 'Present' : 'None');
-  next();
-});
 
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/otp', otpRoutes);
 
-// Test route
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', message: 'Server is running', cookies: req.cookies ? 'present' : 'none' });
-});
-
-app.get('/api/debug-cookies', (req, res) => {
-  console.log('🍪 Debug Cookies:', req.cookies);
-  res.json({
-    cookies: req.cookies,
-    hasAccessToken: !!req.cookies?.accessToken,
-    hasRefreshToken: !!req.cookies?.refreshToken,
-    accessTokenValue: req.cookies?.accessToken ? req.cookies.accessToken.substring(0, 50) + '...' : null,
-    refreshTokenValue: req.cookies?.refreshToken ? req.cookies.refreshToken.substring(0, 50) + '...' : null
-  });
-});
-
-// Cleanup expired tokens every hour
-setInterval(async () => {
-  const deleted = await tokenService.cleanupExpiredTokens();
-  if (deleted > 0) {
-    console.log(`Cleaned up ${deleted} expired refresh tokens`);
+// Health check
+app.get('/api/health', async (req, res) => {
+  try {
+    await sequelize.authenticate();
+    res.json({ status: 'OK', message: 'Server and database are running' });
+  } catch (error) {
+    res.status(500).json({ status: 'ERROR', message: 'Database connection failed' });
   }
-}, 60 * 60 * 1000);
+});
 
-// Database connection and server start
 const PORT = process.env.PORT || 5000;
 
+// Start server
 sequelize.authenticate()
   .then(() => {
-    console.log('Database connected successfully');
+    console.log('✅ Neon database connected successfully');
     return sequelize.sync({ alter: true });
   })
   .then(() => {
     app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
-      console.log(`CORS enabled for origins with credentials`);
+      console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`📡 API available at http://localhost:${PORT}/api`);
     });
   })
   .catch(err => {
-    console.error('Unable to connect to database:', err);
+    console.error('❌ Database connection failed:', err.message);
+    process.exit(1);
   });
