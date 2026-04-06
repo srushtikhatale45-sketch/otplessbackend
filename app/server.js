@@ -11,7 +11,7 @@ const app = express();
 
 // CORS configuration
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://localhost:5173','https://otplessfrontend.vercel.app/'],
+  origin: ['http://localhost:3000', 'http://localhost:5173','https://otplessfrontend.vercel.app'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
