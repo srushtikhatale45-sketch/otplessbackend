@@ -63,9 +63,7 @@ const authController = {
       res.status(201).json({
         success: true,
         message: 'User registered successfully. Please verify OTP.',
-        userId: user.id,
-        otpId: otpResult.otpId,
-        otpCode: otpResult.otpCode // Only in development
+  
       });
     } catch (error) {
       console.error('❌ Registration error:', error);
