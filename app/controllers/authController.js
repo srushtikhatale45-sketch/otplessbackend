@@ -1,418 +1,250 @@
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const { User } = require('../models');
-const otpService = require('../services/otpService');
-const tokenService = require('../services/tokenService');
-const { Op } = require('sequelize');
+const User = require('../models/User');
+const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = require('../config/jwt');
 
-const authController = {
-  async register(req, res) {
-    try {
-      const { name, mobileNumber, password } = req.body;
-
-      console.log('📝 Registration attempt for mobile:', mobileNumber);
-
-      // Validation
-      if (!name || !mobileNumber || !password) {
-        return res.status(400).json({
-          success: false,
-          message: 'Name, mobile number and password are required'
-        });
-      }
-
-      // Mobile number validation
-      const mobileRegex = /^[0-9]{10}$/;
-      if (!mobileRegex.test(mobileNumber)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid mobile number. Please enter a valid 10-digit mobile number'
-        });
-      }
-
-      // Check if user exists
-      const existingUser = await User.findOne({ where: { mobileNumber } });
-
-      if (existingUser) {
-        return res.status(400).json({
-          success: false,
-          message: 'User already exists with this mobile number'
-        });
-      }
-
-      const hashedPassword = await bcrypt.hash(password, 10);
-
-      const user = await User.create({
-        name,
-        mobileNumber,
-        password: hashedPassword,
-        isVerified: false
-      });
-
-      console.log('✅ User registered:', user.id);
-
-      // Send OTP
-      const otpResult = await otpService.sendOTP(user.id, 'registration');
-
-      if (!otpResult.success) {
-        return res.status(500).json({
-          success: false,
-          message: 'Failed to send OTP'
-        });
-      }
-
-      res.status(201).json({
-        success: true,
-        message: 'User registered successfully. Please verify OTP.',
-        userId: user.id,
-        otpId: otpResult.otpId,
+// Set cookies with tokens
+const setTokenCookies = (res, accessToken, refreshToken) => {
+  // Cookie options
+  const isProduction = process.env.NODE_ENV === 'production';
   
-      });
-    } catch (error) {
-      console.error('❌ Registration error:', error);
-      res.status(500).json({
+  res.cookie('accessToken', accessToken, {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: 'lax',
+    maxAge: 15 * 60 * 1000 // 15 minutes
+  });
+  
+  res.cookie('refreshToken', refreshToken, {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+  });
+};
+
+// Clear cookies
+const clearTokenCookies = (res) => {
+  res.clearCookie('accessToken');
+  res.clearCookie('refreshToken');
+};
+
+// Login/Sync user after OTP verification
+const loginUser = async (req, res) => {
+  try {
+    const { user } = req.body;
+    
+    if (!user || !user.id) {
+      return res.status(400).json({
         success: false,
-        message: 'Registration failed: ' + error.message
+        message: 'User data required'
       });
     }
-  },
-
-  async verifyOTPAndGenerateTokens(req, res) {
-    try {
-      const { userId, otpCode, purpose, deviceInfo, ipAddress } = req.body;
-
-      console.log('🔐 Verifying OTP for user:', userId);
-
-      const result = await otpService.verifyOTP(userId, otpCode, purpose);
-
-      if (!result.verified) {
-        return res.json({
-          success: false,
-          verified: false,
-          message: result.message
-        });
-      }
-
-      const user = await User.findByPk(userId);
-      
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
-      }
-      
-      // Generate tokens
-      const accessToken = tokenService.generateAccessToken(user);
-      const refreshTokenObj = await tokenService.createRefreshToken(
-        userId, 
-        deviceInfo || req.headers['user-agent'] || 'unknown',
-        ipAddress || req.ip || req.connection.remoteAddress
-      );
-
-      console.log('🎫 Tokens generated for user:', user.mobileNumber);
-      console.log('   Access Token:', accessToken.substring(0, 50) + '...');
-      console.log('   Refresh Token:', refreshTokenObj.token.substring(0, 50) + '...');
-
-      // Set Access Token in HTTP-only cookie
-      res.cookie('accessToken', accessToken, {
-        httpOnly: true,
-        secure: false, // Set to false for development (HTTP)
-        sameSite: 'lax',
-        maxAge: 15 * 60 * 1000, // 15 minutes
-        path: '/',
-        domain: 'localhost'
-      });
-
-      // Set Refresh Token in HTTP-only cookie
-      res.cookie('refreshToken', refreshTokenObj.token, {
-        httpOnly: true,
-        secure: false, // Set to false for development (HTTP)
-        sameSite: 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-        path: '/',
-        domain: 'localhost'
-      });
-
-      console.log('🍪 Cookies set successfully');
-
-      return res.json({
-        success: true,
-        verified: true,
-        message: result.message,
-        user: {
-          id: user.id,
-          name: user.name,
-          mobileNumber: user.mobileNumber,
-          isVerified: user.isVerified
-        }
-      });
-    } catch (error) {
-      console.error('❌ OTP verification error:', error);
-      res.status(500).json({
+    
+    const dbUser = await User.findByPk(user.id);
+    
+    if (!dbUser) {
+      return res.status(404).json({
         success: false,
-        verified: false,
-        message: 'OTP verification failed: ' + error.message
+        message: 'User not found'
       });
     }
-  },
-
-  async login(req, res) {
-    try {
-      const { mobileNumber, password } = req.body;
-
-      console.log('🔑 Login attempt for mobile:', mobileNumber);
-
-      if (!mobileNumber || !password) {
-        return res.status(400).json({
-          success: false,
-          message: 'Mobile number and password are required'
-        });
+    
+    // Generate tokens
+    const accessToken = generateAccessToken(dbUser);
+    const refreshToken = generateRefreshToken(dbUser);
+    
+    // Hash and store refresh token in database
+    await dbUser.hashRefreshToken(refreshToken);
+    
+    // Update last login
+    await dbUser.update({ lastLogin: new Date() });
+    
+    // Set cookies
+    setTokenCookies(res, accessToken, refreshToken);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Login successful',
+      user: {
+        id: dbUser.id,
+        name: dbUser.name,
+        mobileNumber: dbUser.mobileNumber,
+        isVerified: dbUser.isVerified
       }
-
-      const user = await User.findOne({ where: { mobileNumber } });
-      
-      if (!user) {
-        return res.status(401).json({
-          success: false,
-          message: 'Invalid credentials'
-        });
-      }
-
-      const isValidPassword = await bcrypt.compare(password, user.password);
-      if (!isValidPassword) {
-        return res.status(401).json({
-          success: false,
-          message: 'Invalid credentials'
-        });
-      }
-
-      // Send OTP
-      const otpResult = await otpService.sendOTP(user.id, 'login');
-
-      if (!otpResult.success) {
-        return res.status(500).json({
-          success: false,
-          message: 'Failed to send OTP'
-        });
-      }
-
-      res.json({
-        success: true,
-        message: 'OTP sent successfully',
-        userId: user.id,
-        otpId: otpResult.otpId,
-        otpCode: otpResult.otpCode // Only in development
-      });
-    } catch (error) {
-      console.error('❌ Login error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Login failed: ' + error.message
-      });
-    }
-  },
-
-  async refreshAccessToken(req, res) {
-    try {
-      const refreshToken = req.cookies?.refreshToken;
-
-      console.log('🔄 Refresh token request received');
-      console.log('   Cookie present:', !!refreshToken);
-
-      if (!refreshToken) {
-        return res.status(401).json({
-          success: false,
-          message: 'Refresh token not found'
-        });
-      }
-
-      const result = await tokenService.verifyRefreshToken(refreshToken);
-
-      if (!result.valid) {
-        return res.status(401).json({
-          success: false,
-          message: result.message
-        });
-      }
-
-      // Generate new access token
-      const newAccessToken = tokenService.generateAccessToken(result.user);
-
-      console.log('✅ New access token generated for user:', result.user.mobileNumber);
-
-      // Set new access token in cookie
-      res.cookie('accessToken', newAccessToken, {
-        httpOnly: true,
-        secure: false,
-        sameSite: 'lax',
-        maxAge: 15 * 60 * 1000,
-        path: '/',
-        domain: 'localhost'
-      });
-
-      res.json({
-        success: true,
-        message: 'Access token refreshed successfully'
-      });
-    } catch (error) {
-      console.error('❌ Refresh token error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to refresh token: ' + error.message
-      });
-    }
-  },
-
-  async logout(req, res) {
-    try {
-      const refreshToken = req.cookies?.refreshToken;
-      
-      if (refreshToken) {
-        await tokenService.revokeRefreshToken(refreshToken);
-      }
-      
-      // Clear cookies
-      res.clearCookie('accessToken', { path: '/', domain: 'localhost' });
-      res.clearCookie('refreshToken', { path: '/', domain: 'localhost' });
-
-      console.log('✅ User logged out successfully');
-
-      res.json({
-        success: true,
-        message: 'Logged out successfully'
-      });
-    } catch (error) {
-      console.error('❌ Logout error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Logout failed'
-      });
-    }
-  },
-
-  async logoutAllDevices(req, res) {
-    try {
-      const userId = req.user.userId;
-      
-      await tokenService.revokeAllUserTokens(userId);
-      
-      res.clearCookie('accessToken', { path: '/', domain: 'localhost' });
-      res.clearCookie('refreshToken', { path: '/', domain: 'localhost' });
-
-      console.log('✅ User logged out from all devices:', userId);
-
-      res.json({
-        success: true,
-        message: 'Logged out from all devices successfully'
-      });
-    } catch (error) {
-      console.error('❌ Logout all devices error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Logout from all devices failed'
-      });
-    }
-  },
-
-  async getMe(req, res) {
-    try {
-      const user = await User.findByPk(req.user.userId, {
-        attributes: ['id', 'name', 'mobileNumber', 'isVerified', 'createdAt']
-      });
-
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
-      }
-
-      res.json({
-        success: true,
-        user
-      });
-    } catch (error) {
-      console.error('❌ Get me error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to get user information'
-      });
-    }
-  },
-
-  async resendOTP(req, res) {
-    try {
-      const { userId, purpose } = req.body;
-      const result = await otpService.sendOTP(userId, purpose);
-      res.json(result);
-    } catch (error) {
-      console.error('❌ Resend OTP error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to resend OTP'
-      });
-    }
-  },
-
-  async checkAuth(req, res) {
-    try {
-      const accessToken = req.cookies?.accessToken;
-      const refreshToken = req.cookies?.refreshToken;
-      
-      console.log('🔍 Check auth - Access token:', !!accessToken);
-      console.log('🔍 Check auth - Refresh token:', !!refreshToken);
-      
-      if (!accessToken) {
-        return res.json({
-          success: true,
-          isAuthenticated: false,
-          message: 'No access token found'
-        });
-      }
-
-      try {
-        const decoded = jwt.verify(accessToken, process.env.JWT_ACCESS_SECRET || 'fallback_access_secret_key_please_change');
-        const user = await User.findByPk(decoded.userId, {
-          attributes: ['id', 'name', 'mobileNumber', 'isVerified']
-        });
-        
-        if (user) {
-          console.log('✅ User authenticated:', user.mobileNumber);
-          res.json({
-            success: true,
-            isAuthenticated: true,
-            user
-          });
-        } else {
-          res.json({
-            success: true,
-            isAuthenticated: false,
-            message: 'User not found'
-          });
-        }
-      } catch (error) {
-        console.log('❌ Token verification failed:', error.message);
-        
-        // Try to refresh token if available
-        if (refreshToken) {
-          console.log('🔄 Attempting to refresh token...');
-          // You can implement auto-refresh here
-        }
-        
-        res.json({
-          success: true,
-          isAuthenticated: false,
-          message: 'Token expired or invalid'
-        });
-      }
-    } catch (error) {
-      console.error('❌ Check auth error:', error);
-      res.status(500).json({
-        success: false,
-        isAuthenticated: false
-      });
-    }
+    });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to login',
+      error: error.message
+    });
   }
 };
 
-module.exports = authController;
+// Refresh access token using refresh token
+const refreshAccessToken = async (req, res) => {
+  try {
+    const refreshToken = req.cookies?.refreshToken;
+    
+    if (!refreshToken) {
+      return res.status(401).json({
+        success: false,
+        message: 'Refresh token required',
+        error: 'NO_REFRESH_TOKEN'
+      });
+    }
+    
+    const decoded = verifyRefreshToken(refreshToken);
+    
+    if (!decoded) {
+      clearTokenCookies(res);
+      return res.status(403).json({
+        success: false,
+        message: 'Invalid or expired refresh token',
+        error: 'INVALID_REFRESH_TOKEN'
+      });
+    }
+    
+    const user = await User.findByPk(decoded.id);
+    
+    if (!user) {
+      clearTokenCookies(res);
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+        error: 'USER_NOT_FOUND'
+      });
+    }
+    
+    // Verify refresh token matches stored hash
+    const isValidToken = await user.verifyRefreshToken(refreshToken);
+    
+    if (!isValidToken) {
+      clearTokenCookies(res);
+      return res.status(403).json({
+        success: false,
+        message: 'Invalid refresh token',
+        error: 'INVALID_TOKEN'
+      });
+    }
+    
+    // Generate new access token
+    const newAccessToken = generateAccessToken(user);
+    
+    // Generate new refresh token (optional - for better security)
+    const newRefreshToken = generateRefreshToken(user);
+    await user.hashRefreshToken(newRefreshToken);
+    
+    // Set new cookies
+    setTokenCookies(res, newAccessToken, newRefreshToken);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Token refreshed successfully'
+    });
+  } catch (error) {
+    console.error('Refresh token error:', error);
+    clearTokenCookies(res);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to refresh token',
+      error: error.message
+    });
+  }
+};
+
+// Logout user
+const logoutUser = async (req, res) => {
+  try {
+    const refreshToken = req.cookies?.refreshToken;
+    
+    if (refreshToken && req.user) {
+      // Clear refresh token from database
+      await req.user.update({ refreshToken: null });
+    }
+    
+    clearTokenCookies(res);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Logged out successfully'
+    });
+  } catch (error) {
+    console.error('Logout error:', error);
+    clearTokenCookies(res);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to logout',
+      error: error.message
+    });
+  }
+};
+
+// Get current user
+const getCurrentUser = async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Not authenticated'
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      user: {
+        id: req.user.id,
+        name: req.user.name,
+        mobileNumber: req.user.mobileNumber,
+        isVerified: req.user.isVerified,
+        lastLogin: req.user.lastLogin
+      }
+    });
+  } catch (error) {
+    console.error('Get current user error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get user',
+      error: error.message
+    });
+  }
+};
+
+// Check if user is authenticated
+const checkAuth = async (req, res) => {
+  try {
+    if (req.user) {
+      res.status(200).json({
+        success: true,
+        authenticated: true,
+        user: {
+          id: req.user.id,
+          name: req.user.name,
+          mobileNumber: req.user.mobileNumber,
+          isVerified: req.user.isVerified
+        }
+      });
+    } else {
+      res.status(200).json({
+        success: true,
+        authenticated: false
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      authenticated: false,
+      error: error.message
+    });
+  }
+};
+
+module.exports = {
+  loginUser,
+  refreshAccessToken,
+  logoutUser,
+  getCurrentUser,
+  checkAuth,
+  setTokenCookies,
+  clearTokenCookies
+};

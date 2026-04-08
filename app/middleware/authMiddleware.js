@@ -1,54 +1,67 @@
-const jwt = require('jsonwebtoken');
+const { verifyAccessToken } = require('../config/jwt');
+const User = require('../models/User');
 
-const authMiddleware = {
-  verifyAccessToken: (req, res, next) => {
+const authenticateToken = async (req, res, next) => {
+  try {
+    // Get token from cookie
     const token = req.cookies?.accessToken;
-
-    console.log('Verifying access token:', token ? 'Present' : 'Missing');
-
+    
     if (!token) {
       return res.status(401).json({
         success: false,
-        message: 'Access token required'
+        message: 'Access token required',
+        error: 'UNAUTHORIZED'
       });
     }
-
-    try {
-      const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
-      req.user = decoded;
-      console.log('Access token verified for user:', decoded.email);
-      next();
-    } catch (error) {
-      console.error('Token verification error:', error.message);
-      
-      if (error.name === 'TokenExpiredError') {
-        return res.status(401).json({
-          success: false,
-          message: 'Access token expired',
-          code: 'TOKEN_EXPIRED'
-        });
-      }
-      
+    
+    const decoded = verifyAccessToken(token);
+    
+    if (!decoded) {
       return res.status(403).json({
         success: false,
-        message: 'Invalid access token'
+        message: 'Invalid or expired access token',
+        error: 'TOKEN_EXPIRED'
       });
     }
-  },
-
-  verifyRefreshTokenFromCookie: (req, res, next) => {
-    const refreshToken = req.cookies?.refreshToken;
     
-    if (!refreshToken) {
+    // Get user from database
+    const user = await User.findByPk(decoded.id);
+    
+    if (!user) {
       return res.status(401).json({
         success: false,
-        message: 'Refresh token required'
+        message: 'User not found',
+        error: 'USER_NOT_FOUND'
       });
     }
+    
+    req.user = user;
+    next();
+  } catch (error) {
+    console.error('Auth middleware error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Authentication error',
+      error: error.message
+    });
+  }
+};
 
-    req.refreshToken = refreshToken;
+const optionalAuth = async (req, res, next) => {
+  try {
+    const token = req.cookies?.accessToken;
+    
+    if (token) {
+      const decoded = verifyAccessToken(token);
+      if (decoded) {
+        const user = await User.findByPk(decoded.id);
+        if (user) req.user = user;
+      }
+    }
+    next();
+  } catch (error) {
     next();
   }
 };
 
-module.exports = authMiddleware;
+module.exports = { authenticateToken, optionalAuth };

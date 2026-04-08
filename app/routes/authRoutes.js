@@ -1,19 +1,18 @@
 const express = require('express');
-const authController = require('../controllers/authController');
-const authMiddleware = require('../middleware/authMiddleware');
 const router = express.Router();
+const { 
+  loginUser, 
+  refreshAccessToken, 
+  logoutUser, 
+  getCurrentUser, 
+  checkAuth 
+} = require('../controllers/authController');
+const { authenticateToken, optionalAuth } = require('../middleware/authMiddleware');
 
-// Public routes
-router.post('/register', authController.register);
-router.post('/login', authController.login);
-router.post('/verify-otp', authController.verifyOTPAndGenerateTokens);
-router.post('/resend-otp', authController.resendOTP);
-router.post('/refresh-token', authController.refreshAccessToken);
-router.post('/logout', authController.logout);
-router.get('/check-auth', authController.checkAuth);
-
-// Protected routes
-router.post('/logout-all', authMiddleware.verifyAccessToken, authController.logoutAllDevices);
-router.get('/me', authMiddleware.verifyAccessToken, authController.getMe);
+router.post('/login', loginUser);
+router.post('/refresh-token', refreshAccessToken);
+router.post('/logout', authenticateToken, logoutUser);
+router.get('/me', authenticateToken, getCurrentUser);
+router.get('/check', optionalAuth, checkAuth);
 
 module.exports = router;

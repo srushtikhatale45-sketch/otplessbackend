@@ -1,22 +1,29 @@
 const { Sequelize } = require('sequelize');
-require('dotenv').config();
+const dotenv = require('dotenv');
 
-// Parse Neon connection string or use individual parameters
+dotenv.config();
+
 const sequelize = new Sequelize(process.env.DATABASE_URL, {
   dialect: 'postgres',
   dialectOptions: {
     ssl: {
       require: true,
-      rejectUnauthorized: false // Required for Neon
+      rejectUnauthorized: false
     }
   },
-  logging: console.log,
-  pool: {
-    max: 5,
-    min: 0,
-    acquire: 30000,
-    idle: 10000
-  }
+  logging: false
 });
 
-module.exports = sequelize;
+const connectDB = async () => {
+  try {
+    await sequelize.authenticate();
+    console.log('✅ PostgreSQL connected successfully via Neon');
+    await sequelize.sync({ alter: true });
+    console.log('✅ Database synced');
+  } catch (error) {
+    console.error('❌ Unable to connect to database:', error);
+    process.exit(1);
+  }
+};
+
+module.exports = { sequelize, connectDB };

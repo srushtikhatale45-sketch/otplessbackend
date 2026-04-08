@@ -1,16 +1,9 @@
 const express = require('express');
-const otpController = require('../controllers/otpController');
-const authMiddleware = require('../middleware/authMiddleware');
 const router = express.Router();
+const { sendOTP, verifyOTP, resendOTP } = require('../controllers/otpController');
 
-// Protected routes (require authentication)
-router.post('/send', authMiddleware.verifyAccessToken, otpController.sendOTP);
-router.post('/verify', authMiddleware.verifyAccessToken, otpController.verifyOTP);
-router.post('/resend', authMiddleware.verifyAccessToken, otpController.resendOTP);
-router.get('/check-status/:userId', authMiddleware.verifyAccessToken, otpController.checkOTPStatus);
-
-// Public routes (for testing/development)
-router.post('/test-send', otpController.testSendOTP);
-router.post('/test-verify', otpController.testVerifyOTP);
+router.post('/send-otp', sendOTP);
+router.post('/verify-otp', verifyOTP);
+router.post('/resend-otp', resendOTP);
 
 module.exports = router;
