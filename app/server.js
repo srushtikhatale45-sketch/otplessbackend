@@ -85,7 +85,7 @@ const startServer = async () => {
       console.log(`   GET    /api/auth/check\n`);
     });
   } catch (error) {
-    console.error('Failed to start server:', error);
+    console.error('Failed to start server try again :', error);
     process.exit(1);
   }
 };
