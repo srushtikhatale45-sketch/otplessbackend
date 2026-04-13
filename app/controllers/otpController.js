@@ -1,9 +1,10 @@
 const { Op } = require('sequelize');
 const OTP = require('../models/OTP');
 const User = require('../models/User');
-const { sendOTPviaSMS } = require('../services/smsService');
+const { sendOTPviaSMS, checkBalance } = require('../services/smsService');
 const { generateAccessToken, generateRefreshToken } = require('../config/jwt');
 
+// Generate random 6-digit OTP
 const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
@@ -16,18 +17,20 @@ const setTokenCookies = (res, accessToken, refreshToken) => {
     httpOnly: true,
     secure: isProduction,
     sameSite: 'lax',
-    maxAge: 15 * 60 * 1000
+    maxAge: 15 * 60 * 1000 // 15 minutes
   });
   
   res.cookie('refreshToken', refreshToken, {
     httpOnly: true,
     secure: isProduction,
     sameSite: 'lax',
-    maxAge: 7 * 24 * 60 * 60 * 1000
+    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
   });
 };
 
+// Send OTP
 const sendOTP = async (req, res) => {
+  
   try {
     const { phoneNumber } = req.body;
     
@@ -43,6 +46,7 @@ const sendOTP = async (req, res) => {
     const expiresAt = new Date();
     expiresAt.setMinutes(expiresAt.getMinutes() + 5);
     
+    // Delete any existing unverified OTPs
     await OTP.destroy({
       where: {
         phoneNumber: cleanPhoneNumber,
@@ -50,6 +54,7 @@ const sendOTP = async (req, res) => {
       }
     });
     
+    // Create new OTP record
     const otpRecord = await OTP.create({
       phoneNumber: cleanPhoneNumber,
       otpCode: otpCode,
@@ -57,16 +62,20 @@ const sendOTP = async (req, res) => {
       attempts: 0
     });
     
+    // Send OTP via SMS (real or simulated)
     await sendOTPviaSMS(cleanPhoneNumber, otpCode);
     
+    // Response without OTP - completely hidden
     const responseData = {
       success: true,
       message: 'OTP sent successfully',
       otpId: otpRecord.id
     };
     
-    if (process.env.NODE_ENV === 'development') {
-      responseData.devOtp = otpCode;
+    // OTP is NEVER sent in response - completely removed
+    // Only log OTP to console for debugging in development
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`📱 Development OTP for ${cleanPhoneNumber}: ${otpCode}`);
     }
     
     res.status(200).json(responseData);
@@ -81,6 +90,7 @@ const sendOTP = async (req, res) => {
   }
 };
 
+// Verify OTP
 const verifyOTP = async (req, res) => {
   try {
     const { phoneNumber, otpCode, name } = req.body;
@@ -95,6 +105,7 @@ const verifyOTP = async (req, res) => {
     
     const cleanPhoneNumber = phoneNumber.replace(/\D/g, '');
     
+    // Find the OTP record
     const otpRecord = await OTP.findOne({
       where: {
         phoneNumber: cleanPhoneNumber,
@@ -114,6 +125,7 @@ const verifyOTP = async (req, res) => {
       });
     }
     
+    // Check attempts limit
     if (otpRecord.attempts >= 5) {
       await otpRecord.destroy();
       return res.status(400).json({
@@ -123,6 +135,7 @@ const verifyOTP = async (req, res) => {
       });
     }
     
+    // Verify OTP
     if (otpRecord.otpCode === otpCode) {
       await otpRecord.update({ isVerified: true });
       
@@ -164,6 +177,7 @@ const verifyOTP = async (req, res) => {
         }
       });
     } else {
+      // Increment failed attempts
       await otpRecord.update({
         attempts: otpRecord.attempts + 1
       });
@@ -186,6 +200,7 @@ const verifyOTP = async (req, res) => {
   }
 };
 
+// Resend OTP
 const resendOTP = async (req, res) => {
   try {
     const { phoneNumber } = req.body;
@@ -199,6 +214,7 @@ const resendOTP = async (req, res) => {
     
     const cleanPhoneNumber = phoneNumber.replace(/\D/g, '');
     
+    // Check for recent OTP (30 second cooldown)
     const recentOTP = await OTP.findOne({
       where: {
         phoneNumber: cleanPhoneNumber,
@@ -215,10 +231,12 @@ const resendOTP = async (req, res) => {
       });
     }
     
+    // Generate new OTP
     const otpCode = generateOTP();
     const expiresAt = new Date();
     expiresAt.setMinutes(expiresAt.getMinutes() + 5);
     
+    // Delete old unverified OTPs
     await OTP.destroy({
       where: {
         phoneNumber: cleanPhoneNumber,
@@ -226,6 +244,7 @@ const resendOTP = async (req, res) => {
       }
     });
     
+    // Create new OTP record
     const otpRecord = await OTP.create({
       phoneNumber: cleanPhoneNumber,
       otpCode: otpCode,
@@ -233,16 +252,19 @@ const resendOTP = async (req, res) => {
       attempts: 0
     });
     
+    // Send OTP via SMS
     await sendOTPviaSMS(cleanPhoneNumber, otpCode);
     
+    // Response without OTP - completely hidden
     const responseData = {
       success: true,
       message: 'OTP resent successfully',
       otpId: otpRecord.id
     };
     
-    if (process.env.NODE_ENV === 'development') {
-      responseData.devOtp = otpCode;
+    // Only log to console in development
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`📱 Development OTP for ${cleanPhoneNumber}: ${otpCode}`);
     }
     
     res.status(200).json(responseData);
@@ -257,4 +279,28 @@ const resendOTP = async (req, res) => {
   }
 };
 
-module.exports = { sendOTP, verifyOTP, resendOTP };
+// Get SMS balance (optional feature)
+const getSMSBalance = async (req, res) => {
+  try {
+    const balance = await checkBalance();
+    res.status(200).json({
+      success: true,
+      balance: balance
+    });
+  } catch (error) {
+    console.error('Balance check error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to check SMS balance',
+      error: error.message
+    });
+  }
+};
+
+// Export all functions
+module.exports = { 
+  sendOTP, 
+  verifyOTP, 
+  resendOTP,
+  getSMSBalance 
+};
