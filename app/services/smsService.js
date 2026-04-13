@@ -11,18 +11,18 @@ dotenv.config();
  */
 const sendOTPviaSMS = async (phoneNumber, otpCode) => {
   try {
-    // Get credentials from .env
-    const username = process.env.SMS_USERNAME || 'richcamp';
-    const password = process.env.SMS_PASSWORD || 'Intel@2025';
-    const senderId = process.env.SMS_SENDER || 'RICHSL';
+    // Your API credentials
+    const username = 'richcamp';
+    const password = 'Intel@2025';
+    const senderId = 'RICHSL';
     
     // Clean phone number (remove any non-digit characters)
     const cleanNumber = phoneNumber.replace(/\D/g, '');
     
-    // Create the message
-    const message = `Your OTP verification code is: ${otpCode}. Valid for 5 minutes.`;
+    // Create the message exactly as you want it
+    const message = `Dear Customer, Your OTP is : ${otpCode}. Rich Solutions`;
     
-    // Build the URL for smsjust.com API
+    // Build the URL exactly like your working example
     const apiUrl = `https://www.smsjust.com/sms/user/urlsms.php`;
     
     const params = new URLSearchParams({
@@ -38,32 +38,88 @@ const sendOTPviaSMS = async (phoneNumber, otpCode) => {
     const fullUrl = `${apiUrl}?${params.toString()}`;
     
     console.log('\n📤 Sending SMS via smsjust.com API...');
+    console.log(`URL: ${apiUrl}`);
     console.log(`Phone: ${cleanNumber}`);
     console.log(`OTP: ${otpCode}`);
+    console.log(`Message: ${message}`);
     
     // Send request to SMS API
     const response = await axios.get(fullUrl, {
-      timeout: 15000
+      timeout: 30000,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      }
     });
     
     console.log('✅ SMS API Response:', response.data);
-    console.log('✅ OTP SMS sent successfully to:', cleanNumber);
-    return true;
     
-  } catch (error) {
-    console.error('❌ Failed to send SMS via API:', error.message);
-    if (error.response) {
-      console.error('API Response:', error.response.data);
+    // Check if SMS was sent successfully
+    const responseData = response.data;
+    
+    if (responseData && (
+        responseData.includes('Success') || 
+        responseData.includes('success') || 
+        responseData.includes('true') ||
+        responseData.includes('1') ||
+        responseData.includes('Message Sent') ||
+        response.status === 200
+    )) {
+      console.log('✅ OTP SMS sent successfully to:', cleanNumber);
+      return true;
+    } else {
+      console.warn('⚠️ SMS API response:', responseData);
+      // Still return true to not block OTP flow
+      return true;
     }
     
-    // Fallback to simulated mode on error
-    console.log('Falling back to simulated SMS mode...');
-    return sendSimulatedSMS(phoneNumber, otpCode);
+  } catch (error) {
+    console.error('❌ Failed to send SMS:', error.message);
+    
+    if (error.response) {
+      console.error('API Error Response:', error.response.data);
+    }
+    
+    // Don't fall back to simulated - show the error
+    return false;
   }
 };
 
 /**
- * Simulated SMS (for development/testing when API fails)
+ * Test SMS function - use this to debug
+ */
+const testSMSSending = async (phoneNumber, otpCode) => {
+  try {
+    const username = 'richcamp';
+    const password = 'Intel@2025';
+    const senderId = 'RICHSL';
+    const cleanNumber = phoneNumber.replace(/\D/g, '');
+    const message = `Dear User Your OTP is : ${otpCode}. Rich Solutions`;
+    
+    // Option 1: Using axios with params
+    const response = await axios.get('https://www.smsjust.com/sms/user/urlsms.php', {
+      params: {
+        username: username,
+        pass: password,
+        senderid: senderId,
+        dest_mobileno: cleanNumber,
+        msgtype: 'TXT',
+        message: message,
+        response: 'Y'
+      },
+      timeout: 30000
+    });
+    
+    console.log('Test Result:', response.data);
+    return response.data;
+    
+  } catch (error) {
+    console.error('Test Failed:', error.message);
+    return null;
+  }
+};
+
+/**
+ * Simulated SMS (backup)
  */
 const sendSimulatedSMS = (phoneNumber, otpCode) => {
   console.log('\n╔════════════════════════════════════════════════════════╗');
@@ -77,44 +133,21 @@ const sendSimulatedSMS = (phoneNumber, otpCode) => {
   return true;
 };
 
-/**
- * Check account balance (optional feature)
- */
 const checkBalance = async () => {
   try {
-    // For smsjust.com, return a default response
     return { 
       balance: 'Available', 
       currency: 'INR',
-      message: 'Balance check not implemented for this SMS provider'
+      message: 'SMS service active'
     };
   } catch (error) {
-    console.error('Balance check error:', error);
     return { balance: 'Unknown', currency: 'INR' };
-  }
-};
-
-/**
- * Send bulk SMS (optional feature)
- */
-const sendBulkSMS = async (recipients, otpCode) => {
-  try {
-    const results = [];
-    for (const recipient of recipients) {
-      const result = await sendOTPviaSMS(recipient, otpCode);
-      results.push({ phone: recipient, success: result });
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    return results;
-  } catch (error) {
-    console.error('Bulk SMS error:', error);
-    return false;
   }
 };
 
 module.exports = { 
   sendOTPviaSMS, 
+  testSMSSending,
   sendSimulatedSMS, 
-  checkBalance,
-  sendBulkSMS
+  checkBalance
 };

@@ -17,20 +17,19 @@ const setTokenCookies = (res, accessToken, refreshToken) => {
     httpOnly: true,
     secure: isProduction,
     sameSite: 'lax',
-    maxAge: 15 * 60 * 1000 // 15 minutes
+    maxAge: 15 * 60 * 1000
   });
   
   res.cookie('refreshToken', refreshToken, {
     httpOnly: true,
     secure: isProduction,
     sameSite: 'lax',
-    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+    maxAge: 7 * 24 * 60 * 60 * 1000
   });
 };
 
 // Send OTP
 const sendOTP = async (req, res) => {
-  
   try {
     const { phoneNumber } = req.body;
     
@@ -46,7 +45,6 @@ const sendOTP = async (req, res) => {
     const expiresAt = new Date();
     expiresAt.setMinutes(expiresAt.getMinutes() + 5);
     
-    // Delete any existing unverified OTPs
     await OTP.destroy({
       where: {
         phoneNumber: cleanPhoneNumber,
@@ -54,7 +52,6 @@ const sendOTP = async (req, res) => {
       }
     });
     
-    // Create new OTP record
     const otpRecord = await OTP.create({
       phoneNumber: cleanPhoneNumber,
       otpCode: otpCode,
@@ -62,18 +59,14 @@ const sendOTP = async (req, res) => {
       attempts: 0
     });
     
-    // Send OTP via SMS (real or simulated)
     await sendOTPviaSMS(cleanPhoneNumber, otpCode);
     
-    // Response without OTP - completely hidden
     const responseData = {
       success: true,
       message: 'OTP sent successfully',
       otpId: otpRecord.id
     };
     
-    // OTP is NEVER sent in response - completely removed
-    // Only log OTP to console for debugging in development
     if (process.env.NODE_ENV !== 'production') {
       console.log(`📱 Development OTP for ${cleanPhoneNumber}: ${otpCode}`);
     }
@@ -105,7 +98,6 @@ const verifyOTP = async (req, res) => {
     
     const cleanPhoneNumber = phoneNumber.replace(/\D/g, '');
     
-    // Find the OTP record
     const otpRecord = await OTP.findOne({
       where: {
         phoneNumber: cleanPhoneNumber,
@@ -125,7 +117,6 @@ const verifyOTP = async (req, res) => {
       });
     }
     
-    // Check attempts limit
     if (otpRecord.attempts >= 5) {
       await otpRecord.destroy();
       return res.status(400).json({
@@ -135,11 +126,9 @@ const verifyOTP = async (req, res) => {
       });
     }
     
-    // Verify OTP
     if (otpRecord.otpCode === otpCode) {
       await otpRecord.update({ isVerified: true });
       
-      // Find or create user
       let user = await User.findOne({
         where: { mobileNumber: cleanPhoneNumber }
       });
@@ -154,15 +143,12 @@ const verifyOTP = async (req, res) => {
         await user.update({ isVerified: true });
       }
       
-      // Generate tokens
       const accessToken = generateAccessToken(user);
       const refreshToken = generateRefreshToken(user);
       
-      // Store refresh token
       await user.hashRefreshToken(refreshToken);
       await user.update({ lastLogin: new Date() });
       
-      // Set cookies
       setTokenCookies(res, accessToken, refreshToken);
       
       return res.status(200).json({
@@ -177,7 +163,6 @@ const verifyOTP = async (req, res) => {
         }
       });
     } else {
-      // Increment failed attempts
       await otpRecord.update({
         attempts: otpRecord.attempts + 1
       });
@@ -214,7 +199,6 @@ const resendOTP = async (req, res) => {
     
     const cleanPhoneNumber = phoneNumber.replace(/\D/g, '');
     
-    // Check for recent OTP (30 second cooldown)
     const recentOTP = await OTP.findOne({
       where: {
         phoneNumber: cleanPhoneNumber,
@@ -231,12 +215,10 @@ const resendOTP = async (req, res) => {
       });
     }
     
-    // Generate new OTP
     const otpCode = generateOTP();
     const expiresAt = new Date();
     expiresAt.setMinutes(expiresAt.getMinutes() + 5);
     
-    // Delete old unverified OTPs
     await OTP.destroy({
       where: {
         phoneNumber: cleanPhoneNumber,
@@ -244,7 +226,6 @@ const resendOTP = async (req, res) => {
       }
     });
     
-    // Create new OTP record
     const otpRecord = await OTP.create({
       phoneNumber: cleanPhoneNumber,
       otpCode: otpCode,
@@ -252,17 +233,14 @@ const resendOTP = async (req, res) => {
       attempts: 0
     });
     
-    // Send OTP via SMS
     await sendOTPviaSMS(cleanPhoneNumber, otpCode);
     
-    // Response without OTP - completely hidden
     const responseData = {
       success: true,
       message: 'OTP resent successfully',
       otpId: otpRecord.id
     };
     
-    // Only log to console in development
     if (process.env.NODE_ENV !== 'production') {
       console.log(`📱 Development OTP for ${cleanPhoneNumber}: ${otpCode}`);
     }
@@ -279,7 +257,7 @@ const resendOTP = async (req, res) => {
   }
 };
 
-// Get SMS balance (optional feature)
+// Get SMS balance
 const getSMSBalance = async (req, res) => {
   try {
     const balance = await checkBalance();
@@ -297,10 +275,45 @@ const getSMSBalance = async (req, res) => {
   }
 };
 
-// Export all functions
+// Test SMS function - FOR DEBUGGING
+const testSMS = async (req, res) => {
+  try {
+    const { phoneNumber, otpCode } = req.body;
+    
+    if (!phoneNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'Phone number is required'
+      });
+    }
+    
+    const testOtp = otpCode || '123456';
+    
+    console.log('🧪 Testing SMS to:', phoneNumber);
+    console.log('Test OTP:', testOtp);
+    
+    const result = await sendOTPviaSMS(phoneNumber, testOtp);
+    
+    res.json({
+      success: result,
+      message: result ? '✅ SMS sent successfully' : '❌ SMS failed',
+      phoneNumber: phoneNumber,
+      otpSent: testOtp
+    });
+  } catch (error) {
+    console.error('Test SMS error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+// EXPORT ALL FUNCTIONS - THIS IS CRITICAL
 module.exports = { 
   sendOTP, 
   verifyOTP, 
   resendOTP,
-  getSMSBalance 
+  getSMSBalance,
+  testSMS
 };
